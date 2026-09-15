@@ -110,6 +110,32 @@ def to_serializable(results: Any) -> Any:
     return results
 
 
+def _seed_everything(seed: int) -> None:
+    """Seed every RNG the pipeline could touch. (reproducibility, tech-stack item 9)
+
+    ``config.RANDOM_SEED`` existed as a constant before this function did, but
+    nothing ever called ``random.seed`` / ``numpy.random.seed`` / ``torch.manual_seed``
+    with it - a config value nobody reads is documentation, not reproducibility.
+    Best-effort: torch/numpy may not be installed yet (e.g. `--help` without a
+    venv), which must not block the CLI from working.
+    """
+    import random
+
+    random.seed(seed)
+    try:
+        import numpy as np
+
+        np.random.seed(seed)
+    except ImportError:
+        pass
+    try:
+        import torch
+
+        torch.manual_seed(seed)
+    except ImportError:
+        pass
+
+
 def main() -> int:
     """Run the evaluation. Returns a process exit code."""
     parser = argparse.ArgumentParser(
@@ -152,6 +178,7 @@ def main() -> int:
                        args.limit)
 
     config.ensure_dirs()
+    _seed_everything(config.RANDOM_SEED)
 
     # Imported here, after arg parsing, so that `--help` works without mteb
     # installed - useful when a teammate is still setting up their venv.

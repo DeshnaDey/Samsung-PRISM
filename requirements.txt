@@ -36,6 +36,9 @@ mteb==2.20.11         # benchmark harness; provides AppsRetrieval + NDCG/MRR
 
 # ---- Embedding models -------------------------------------------------------
 sentence-transformers==6.0.1  # bi-encoder + cross-encoder reranker checkpoints
+einops==0.8.1          # required by jinaai/jina-embeddings-v2-base-code's custom
+                        # modeling code (loaded via trust_remote_code=True);
+                        # not needed by stock checkpoints but harmless to have
 
 # ---- Lexical retrieval ------------------------------------------------------
 rank-bm25==0.2.2      # pure-Python BM25 for the sparse half of the hybrid

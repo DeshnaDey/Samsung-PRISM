@@ -97,24 +97,31 @@ MAX_QUERY_CHARS: int = 2_000
 
 ENABLE_SNIPPET_PREPROCESSING: bool = False
 
-#: Truncate snippets to this many characters before encoding. APPS solutions
-#: are long and the bi-encoder context window is short, so this matters.
-#: PLACEHOLDER - measure before trusting.
-MAX_SNIPPET_CHARS: int = 4_000
+#: Truncate snippets to this many characters before encoding, as a safety net
+#: ONLY - DENSE_MODEL_NAME (see workstream 3) was chosen specifically because
+#: its 8k-token context makes truncation rare rather than routine. Raised from
+#: the original 4,000 now that the model can actually see this much code;
+#: still measure the truncation rate on the train split before trusting it.
+MAX_SNIPPET_CHARS: int = 20_000
 
 #: Strip comments/docstrings from code before encoding.
 #: PLACEHOLDER - may help (less noise) or hurt (comments carry NL signal). Test it.
 STRIP_COMMENTS: bool = False
 
-#: Split long snippets into overlapping windows and pool the results.
-#: PLACEHOLDER
+#: Split long snippets into overlapping windows and pool the results. Kept
+#: disabled: with an 8k-token bi-encoder + MAX_SNIPPET_CHARS above, chunking
+#: is a rarely-needed escape hatch, not the default path. Flip it on only if
+#: the truncation-rate measurement above says otherwise.
 ENABLE_CHUNKING: bool = False
-CHUNK_SIZE_CHARS: int = 1_500      # PLACEHOLDER
-CHUNK_OVERLAP_CHARS: int = 200     # PLACEHOLDER
+CHUNK_SIZE_CHARS: int = 1_500      # PLACEHOLDER - only matters if chunking is enabled
+CHUNK_OVERLAP_CHARS: int = 200     # PLACEHOLDER - only matters if chunking is enabled
 
-#: FAISS index factory string. "Flat" = exact brute force, correct but O(N).
-#: PLACEHOLDER - move to "IVF1024,Flat" or HNSW only if latency forces it, and
-#: re-measure NDCG afterwards because ANN is lossy.
+#: FAISS index factory string. FINALIZED as "Flat" (exact brute-force search).
+#: At ~8.77k corpus docs, exact search over normalized vectors is a sub-5ms
+#: numpy/FAISS matmul - there is no latency problem to solve, so an ANN index
+#: (IVF/HNSW) would only trade accuracy away for a speed-up nobody needs. Only
+#: revisit this if TOP_K_DENSE search is independently measured as a
+#: bottleneck, and re-measure NDCG afterwards because ANN is lossy.
 FAISS_INDEX_FACTORY: str = "Flat"
 
 #: Cosine similarity via inner product requires L2-normalized vectors.
@@ -127,22 +134,46 @@ NORMALIZE_EMBEDDINGS: bool = True
 
 # ---- Bi-encoder (dense) -----------------------------------------------------
 
-#: PLACEHOLDER - the day-one baseline model. Pick something small and CPU-fast
-#: first; only move to a bigger checkpoint once the harness is green end to end.
-#: Candidates worth benchmarking: a general MiniLM-class model vs. a
-#: code-specific bi-encoder. Log every swap in experiments.md.
-DENSE_MODEL_NAME: str = "sentence-transformers/all-MiniLM-L6-v2"  # PLACEHOLDER
+#: FINALIZED (tech-stack decision, see TECH_STACK.md item 1).
+#: jina-embeddings-v2-base-code: 161M params, code/NL bilingual retrieval
+#: checkpoint (trained on CodeSearchNet-style text-to-code pairs across 30
+#: languages, so it starts far closer to AppsRetrieval than a general-prose
+#: model), and - the deciding factor for this dataset - an 8,192-token context
+#: via ALiBi. That directly answers the "long APPS snippets get silently
+#: truncated at 512 tokens" problem in the dataset brief, instead of papering
+#: over it with chunking. It is still base-sized, so it fits the CPU-only
+#: constraint for a corpus this small (~12.5k texts encoded once, then cached
+#: - see ENABLE_EMBEDDING_CACHE).
+#:
+#: Fallback if the judging sandbox will not allow trust_remote_code (below):
+#: "sentence-transformers/all-MiniLM-L6-v2" (the original placeholder, and the
+#: model the day-one baseline number was measured with) - swap this one
+#: constant back and MAX_SNIPPET_CHARS truncation starts mattering again.
+DENSE_MODEL_NAME: str = "jinaai/jina-embeddings-v2-base-code"
+
+#: jina-embeddings-v2-base-code ships custom modeling code (ALiBi attention)
+#: rather than a stock HF architecture, so sentence-transformers needs this to
+#: load it at all. Not needed (and ignored) for stock checkpoints like MiniLM.
+DENSE_MODEL_TRUST_REMOTE_CODE: bool = True
 
 #: Encoder batch size. Lower it if the CPU box starts swapping.
 #: PLACEHOLDER
 BATCH_SIZE: int = 32
 
-#: Token limit for the bi-encoder; None = use the checkpoint's own default.
-MAX_SEQ_LENGTH: int | None = None  # PLACEHOLDER
+#: FINALIZED at 1,024 tokens - a deliberate midpoint, not the model's max.
+#: The checkpoint extrapolates to 8,192 tokens, but self-attention cost grows
+#: roughly with the square of sequence length, and encoding the full corpus at
+#: 8,192 tokens on CPU is not a one-time cost worth paying when most APPS
+#: solutions are far shorter. 1,024 covers the long tail without that blowup;
+#: re-measure the truncation rate on the train split and raise it only if
+#: that rate is still uncomfortable.
+MAX_SEQ_LENGTH: int | None = 1_024
 
-#: Some checkpoints (E5, BGE, GTE) require asymmetric prefixes and silently
-#: underperform without them. Leave empty for models that don't use prompts.
-#: PLACEHOLDER
+#: jina-embeddings-v2-base-code is symmetric (no E5/BGE/GTE-style asymmetric
+#: query/document instruction prefix) - confirmed against the model card, not
+#: assumed. Leave both empty for this checkpoint; if the team swaps to an
+#: asymmetric model later (BGE/E5/GTE), this is the first thing to fix, and
+#: silently, since a missing prefix degrades quality without erroring.
 QUERY_PROMPT_PREFIX: str = ""
 DOCUMENT_PROMPT_PREFIX: str = ""
 
@@ -150,7 +181,13 @@ DOCUMENT_PROMPT_PREFIX: str = ""
 
 ENABLE_BM25: bool = False
 
-#: rank_bm25 Okapi defaults. PLACEHOLDER - tune on a dev slice, not on the test set.
+#: FINALIZED as the starting point: rank_bm25's Okapi defaults (also the
+#: values from the original paper). Not tuned to this corpus yet - do that on
+#: the train split's 5k queries, never on test. The bigger lever for code is
+#: the TOKENIZER (src.corpus.index.tokenize_code, owner: corpus): split
+#: snake_case/camelCase into subtokens (and keep the compound too) so "binary
+#: search" matches `binary_search`, lowercase everything, and do NOT strip
+#: underscores - they're part of the identifier BM25 exists to catch.
 BM25_K1: float = 1.5
 BM25_B: float = 0.75
 
@@ -181,15 +218,26 @@ FUSION_WEIGHTS: tuple[float, float] = (0.5, 0.5)
 
 ENABLE_RERANK: bool = False
 
-#: PLACEHOLDER - cross-encoder checkpoint. Cross-encoders are ~100x slower per
-#: pair than the bi-encoder, so RERANK_TOP_N is the real cost knob on CPU.
-RERANK_MODEL_NAME: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"  # PLACEHOLDER
+#: FINALIZED: cross-encoder/ms-marco-MiniLM-L-6-v2. There is no established,
+#: widely-used code-specific cross-encoder to reach for here, so this stays a
+#: general passage-relevance reranker - the "does this text answer this
+#: query" signal it was trained on transfers reasonably to "does this snippet
+#: answer this problem statement." What matters more is that it is small
+#: (6-layer MiniLM, ~22M params): unlike the bi-encoder, this model is on the
+#: PER-QUERY hot path (nothing here is cached), so it is the tightest CPU
+#: latency budget in the whole pipeline. If the team has latency budget left
+#: after measuring, cross-encoder/ms-marco-MiniLM-L-12-v2 is the next rung up
+#: in quality, at roughly double the cost.
+RERANK_MODEL_NAME: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
-#: How many fused candidates actually reach the cross-encoder.
-#: PLACEHOLDER - start small (25-50); CPU latency scales linearly with this.
+#: FINALIZED starting point: 50. Rough CPU budget: 3.77k test queries x 50
+#: candidates = ~188k (query, snippet) forward passes through a 6-layer
+#: MiniLM. Measure actual wall-clock on the first full run (run_eval.py prints
+#: it) and back this off toward 25 if the full evaluation doesn't comfortably
+#: finish - a config that cannot finish scores nothing, per experiments.md.
 RERANK_TOP_N: int = 50
 
-RERANK_BATCH_SIZE: int = 32  # PLACEHOLDER
+RERANK_BATCH_SIZE: int = 32  # PLACEHOLDER - raise if CPU throughput measurement supports it
 
 
 # =============================================================================
@@ -203,8 +251,13 @@ ENABLE_EMBEDDING_CACHE: bool = True
 CACHE_DIR: Path = DATA_DIR / "embedding_cache"
 
 #: Bump to invalidate every cached embedding at once (e.g. after changing
-#: preprocessing in a way the content hash cannot see).
-CACHE_VERSION: str = "v1"
+#: preprocessing in a way the content hash cannot see). Bumped v1 -> v2 here
+#: because DENSE_MODEL_NAME changed (MiniLM -> jina-code); make_cache_key
+#: already folds in the model name too, so this bump is belt-and-suspenders,
+#: not load-bearing - but it's the documented, deliberate way to say "nothing
+#: written before this point should be trusted," which a silent model swap
+#: alone doesn't communicate to someone reading the cache directory later.
+CACHE_VERSION: str = "v2"
 
 #: Cap evaluation to N queries for a fast smoke run. None = full evaluation.
 #: MUST be None for any number recorded in experiments.md or submitted.
@@ -212,6 +265,37 @@ SMOKE_TEST_QUERY_LIMIT: int | None = None
 
 #: Release tag for the final submission.
 RELEASE_TAG: str = "PRISM_GENAI_HACKATHON_Y2026"
+
+
+# =============================================================================
+# BONUS / DEMO ONLY - AST inspection                (owner: whoever demos)
+# =============================================================================
+# Tech-stack decision: Python's stdlib `ast` module, not tree-sitter or any
+# other parser. The corpus is 100% Python (APPS solutions), so there is no
+# multi-language case to justify tree-sitter's extra dependency and grammar
+# management. This flag must never be read by anything under src/pipeline or
+# src/retrieval - AST inspection is presentation-layer only (e.g. showing a
+# retrieved snippet's function signature + docstring instead of raw text, or
+# an AST-diff view for the versioning demo) and must not affect the score.
+
+ENABLE_AST_DEMO: bool = False
+
+
+# =============================================================================
+# OPTIONAL - LLM query expansion                    (owner: query, stretch)
+# =============================================================================
+# Tech-stack decision: SKIP for the scored submission. Expanding 3.77k test
+# queries through any LLM - local or API - adds a per-query latency and
+# failure-mode risk (a hung or rate-limited call mid-evaluation) for an
+# unmeasured NDCG upside, on a CPU-only budget that is already spent on the
+# reranker. If pursued at all, treat it as a demo-narrative feature, not a
+# scored one: run it once, offline, on a handful of illustrative queries, with
+# a model that needs neither a GPU nor network access at judging time (e.g.
+# "google/flan-t5-small", ~80M params) - and cache the expansions through the
+# same embedding cache so it is a one-time cost, never a per-eval-run one.
+
+ENABLE_QUERY_EXPANSION: bool = False
+QUERY_EXPANSION_MODEL: str = "google/flan-t5-small"  # demo-only if ever enabled
 
 
 def ensure_dirs() -> None:
@@ -245,6 +329,12 @@ def describe() -> dict[str, object]:
         "top_k_final": TOP_K_FINAL,
         "rerank_top_n": RERANK_TOP_N if ENABLE_RERANK else None,
         "normalize_embeddings": NORMALIZE_EMBEDDINGS,
+        "max_seq_length": MAX_SEQ_LENGTH,
+        "dense_model_trust_remote_code": DENSE_MODEL_TRUST_REMOTE_CODE,
+        "faiss_index_factory": FAISS_INDEX_FACTORY,
+        "cache_version": CACHE_VERSION if ENABLE_EMBEDDING_CACHE else None,
+        "ast_demo": ENABLE_AST_DEMO,
+        "query_expansion": ENABLE_QUERY_EXPANSION,
         "seed": RANDOM_SEED,
         "smoke_limit": SMOKE_TEST_QUERY_LIMIT,
     }

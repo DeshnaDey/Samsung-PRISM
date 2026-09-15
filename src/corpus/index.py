@@ -32,7 +32,15 @@ class DenseIndexBuilder(IndexBuilder):
     -------------
     1. Encode ``[s["processed_text"] for s in snippets]`` with the shared
        bi-encoder, in batches of ``config.BATCH_SIZE``, through the embedding
-       cache (src/versioning/cache.py) so reruns are cheap.
+       cache (src/versioning/cache.py) so reruns are cheap. Load the
+       SentenceTransformer with
+       ``trust_remote_code=config.DENSE_MODEL_TRUST_REMOTE_CODE`` - the
+       finalized model (jina-embeddings-v2-base-code) ships custom modeling
+       code and silently isn't what you think it is without that flag. Also
+       set ``model.max_seq_length = config.MAX_SEQ_LENGTH`` before encoding,
+       same as ``src/pipeline/baseline.py`` does - the two code paths must
+       stay in sync or the baseline and full-pipeline runs stop being
+       comparable.
     2. L2-normalize if ``config.NORMALIZE_EMBEDDINGS`` - required for cosine
        similarity via FAISS ``IndexFlatIP``.
     3. Build via ``faiss.index_factory(dim, config.FAISS_INDEX_FACTORY, metric)``.

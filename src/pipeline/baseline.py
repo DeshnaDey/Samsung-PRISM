@@ -67,7 +67,14 @@ class BaselineEncoder(_AbsEncoder):  # type: ignore[misc,valid-type]
             from sentence_transformers import SentenceTransformer
 
             logger.info("Loading bi-encoder %s on %s", self.model_name, config.DEVICE)
-            self._model = SentenceTransformer(self.model_name, device=config.DEVICE)
+            # trust_remote_code: only jina-embeddings-v2-base-code (custom
+            # ALiBi modeling code) needs this; harmless no-op for stock
+            # checkpoints like the MiniLM fallback, which ignore the kwarg.
+            self._model = SentenceTransformer(
+                self.model_name,
+                device=config.DEVICE,
+                trust_remote_code=config.DENSE_MODEL_TRUST_REMOTE_CODE,
+            )
             if config.MAX_SEQ_LENGTH is not None:
                 self._model.max_seq_length = config.MAX_SEQ_LENGTH
         return self._model

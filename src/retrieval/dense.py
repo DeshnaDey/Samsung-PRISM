@@ -57,7 +57,10 @@ class DenseRetriever(Retriever):
         """
         self.index_builder = index_builder
         self.model_name = model_name or config.DENSE_MODEL_NAME
-        self._model = None  # TODO(retrieval): lazy-load SentenceTransformer
+        # TODO(retrieval): lazy-load SentenceTransformer(self.model_name,
+        # device=config.DEVICE, trust_remote_code=config.DENSE_MODEL_TRUST_REMOTE_CODE)
+        # - the finalized model needs that last kwarg to load at all.
+        self._model = None
 
     def retrieve(self, query: ProcessedQuery, top_k: int) -> RankedList:
         """Return the ``top_k`` nearest snippets. See class docstring."""

@@ -11,6 +11,7 @@ corpus of code snippets, rank the snippets by relevance.
 - **Constraint:** CPU only. Nothing in this project may request a GPU.
 - **Python:** 3.11
 - **Release tag:** `PRISM_GENAI_HACKATHON_Y2026` _(not yet tagged — see [Submission](#submission))_
+- **Tech stack decisions:** see [`TECH_STACK.md`](TECH_STACK.md) — every model/config choice in `src/config.py`, with the reasoning behind it
 
 ---
 
@@ -105,6 +106,7 @@ All versions are **pinned and verified** — resolved 2026-09-14 on macOS 15
 | `torch` | 2.14.0 (CPU) |
 | `mteb` | **2.20.11** (v2) |
 | `sentence-transformers` | 6.0.1 |
+| `einops` | 0.8.1 |
 | `faiss-cpu` | 1.15.0 |
 | `rank-bm25` | 0.2.2 |
 | `datasets` | 5.0.1 |
